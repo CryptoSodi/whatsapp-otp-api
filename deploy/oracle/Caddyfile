@@ -9,7 +9,7 @@
 :80 {
     @otp host otp.sirfbazar.com
     handle @otp {
-        @public path /send-otp /health /ready
+        @public path /send-otp /send-message /health /ready
         handle @public {
             reverse_proxy 127.0.0.1:3300
         }

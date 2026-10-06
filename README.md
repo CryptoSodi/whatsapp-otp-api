@@ -1,6 +1,6 @@
 # WhatsApp OTP Sending API
 
-A small, self-hosted Node.js API that delivers an OTP supplied by your application over WhatsApp. Your application generates, expires, and verifies the OTP. This service has no OTP generation, verification, user database, or arbitrary-message endpoint.
+A small, self-hosted Node.js API that delivers caller-supplied OTPs and custom text over WhatsApp. Your application generates, expires, and verifies the OTP. This service has no OTP generation, verification, or user database. `/send-otp` applies a fixed template; `/send-message` sends your supplied text.
 
 The service uses Fastify 5, TypeScript, and **Baileys 7.0.0-rc14**, pinned in `package-lock.json`. Run it as one persistent process on a Linux VM such as Oracle Cloud, with one WhatsApp account. Vercel Functions are not the deployment target.
 
@@ -89,14 +89,14 @@ HTTP `200`:
 
 - `phone`: international format with `+`, followed by 7-15 digits; no spaces or punctuation. It must identify a WhatsApp user, not a group.
 - `otp`: a **string** of 4-10 ASCII digits. Leading zeros are preserved. Numbers, extra fields, and custom message text are rejected.
-- Requests are limited to 2 KiB. The default global send limit is 30 valid, authenticated requests per minute. This protects the service; it is **not a WhatsApp-approved sending allowance**.
+- OTP request bodies are limited to 2 KiB. The default global send limit is 30 valid, authenticated requests per minute, shared with custom messages. This protects the service; it is **not a WhatsApp-approved sending allowance**.
 - One submission is processed at a time. Concurrent submissions receive `429 SENDER_BUSY`; there is no delayed queue.
 - No automatic OTP resubmission, message retry cache, durable message store, or idempotency guarantee. Repeating a successful request sends another message. Coordinate retries in your application.
 - A `502/504 SEND_UNCONFIRMED` can occur after WhatsApp accepted a message. **Do not blindly retry it**; your application owns resend and expiry decisions.
 
 ### Optional single-URL sending
 
-Set `URL_SEND_KEY` to a separate random secret (32-256 letters, digits, underscores or hyphens) to enable GET sending. It must differ from both existing keys. Leave it unset to disable this route.
+Set `URL_SEND_KEY` to a separate random secret (32-256 letters, digits, underscores or hyphens) to enable GET sending. It must differ from both existing keys. Leave it unset to disable both GET sending routes.
 
 ```text
 http://otp.sirfbazar.com/send-otp?key=YOUR_URL_SEND_KEY&phone=%2B923074000106&otp=123456
@@ -104,12 +104,35 @@ http://otp.sirfbazar.com/send-otp?key=YOUR_URL_SEND_KEY&phone=%2B923074000106&ot
 
 Replace `otp` with the caller-generated code. `%2B` encodes the phone number's `+`. This sends the same fixed verification template as POST; arbitrary messages are not accepted. It shares POST's rate limit. HEAD and marked prefetch requests cannot send messages. Opening or refreshing the URL submits another request; unmarked link previews can also call it, so keep the complete URL private and do not embed it in pages or share it with preview services. The URL key and OTP can appear in browser history and infrastructure logs even though this application does not log them. The current Oracle origin is HTTP; use encrypted transport for real credentials and OTPs. POST remains available for backend integrations.
 
+## Send custom text
+
+Use `POST /send-message` with the same `API_KEY` bearer authentication:
+
+```sh
+curl --fail-with-body http://otp.sirfbazar.com/send-message \
+  -H "Authorization: Bearer $API_KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{"phone":"+923074000106","message":"Hello from Sirfbazar!"}'
+```
+
+Or use a single URL with the same `URL_SEND_KEY`:
+
+```text
+http://otp.sirfbazar.com/send-message?key=YOUR_URL_SEND_KEY&phone=%2B923074000106&message=Hello%20from%20Sirfbazar%21
+```
+
+The message must be non-blank text of at most 1,000 Unicode characters. Spaces, newlines, emojis, and WhatsApp formatting markers are preserved; no OTP template is added. URL-encode custom text, including `&`, `+`, `#`, and newlines, with `URLSearchParams` or `encodeURIComponent`. For example, a newline becomes `%0A`. POST is easier for longer text and accepts a request body up to 16 KiB. Do not expose keys in frontend JavaScript.
+
+All four sending routes share one rate limit and the same single-send guard. They return the same `submitted` response and error behavior. GET keeps the same private-link restrictions described above. Text is never written to the application's request logs or session database.
+
 ### Routes
 
 | Method | Route                 | Authorization    | Purpose                                      |
 | ------ | --------------------- | ---------------- | -------------------------------------------- |
 | POST   | `/send-otp`           | API key          | Send the supplied OTP                        |
 | GET    | `/send-otp`           | URL key in query | Optional URL-based OTP send                  |
+| POST   | `/send-message`       | API key          | Send custom text                             |
+| GET    | `/send-message`       | URL key in query | Optional URL-based custom text send          |
 | GET    | `/health`             | Public           | Process liveness, independent of WhatsApp    |
 | GET    | `/ready`              | API key          | HTTP 200 when connected, otherwise 503       |
 | GET    | `/admin/session`      | Admin key        | Connection state                             |
@@ -160,7 +183,7 @@ Point a DNS hostname to the VM's public IP and set `API_DOMAIN=otp.yourdomain.co
 docker compose -f compose.yaml -f compose.https.yaml up -d --build
 ```
 
-Caddy obtains and renews HTTPS certificates. The supplied configuration exposes only `/send-otp`, `/health`, and `/ready`; admin routes return 404 through the public proxy. Use `https://otp.yourdomain.com/send-otp` in your application.
+Caddy obtains and renews HTTPS certificates. The supplied configuration exposes only `/send-otp`, `/send-message`, `/health`, and `/ready`; admin routes return 404 through the public proxy. Use `https://otp.yourdomain.com/send-otp` or `/send-message` in your application.
 
 For pairing from your computer, create an SSH tunnel:
 
@@ -182,19 +205,19 @@ HTTP health checks measure process liveness. Monitor `/ready` separately for Wha
 
 ## Configuration
 
-| Variable               | Default                      | Meaning                                                                        |
-| ---------------------- | ---------------------------- | ------------------------------------------------------------------------------ |
-| `API_KEY`              | Required                     | 32-256 letters/digits/underscores/hyphens; backend send credential             |
-| `ADMIN_KEY`            | Required                     | Separate key with the same format; account pairing credential                  |
-| `URL_SEND_KEY`         | Unset (disabled)             | Separate key enabling URL-based OTP sending; never an admin credential         |
-| `HOST`                 | `127.0.0.1`                  | HTTP bind address; Compose sets `0.0.0.0` inside the container                 |
-| `PORT`                 | `3000`                       | HTTP port                                                                      |
-| `DATA_DIR`             | `./data`                     | Private session directory; Compose sets `/app/data`                            |
-| `OTP_MESSAGE_TEMPLATE` | Default verification message | Fixed server-side text containing exactly one `{otp}`, maximum 1000 characters |
-| `SEND_TIMEOUT_MS`      | `20000`                      | Submission deadline, 1000-60000 ms                                             |
-| `RATE_LIMIT_MAX`       | `30`                         | Global send requests per minute, stored in memory and reset on process restart |
-| `LOG_LEVEL`            | `info`                       | `info`, `warn`, `error`, or `silent`                                           |
-| `API_DOMAIN`           | Example hostname             | Only used by the optional HTTPS Compose configuration                          |
+| Variable               | Default                      | Meaning                                                                                |
+| ---------------------- | ---------------------------- | -------------------------------------------------------------------------------------- |
+| `API_KEY`              | Required                     | 32-256 letters/digits/underscores/hyphens; backend send credential                     |
+| `ADMIN_KEY`            | Required                     | Separate key with the same format; account pairing credential                          |
+| `URL_SEND_KEY`         | Unset (disabled)             | Separate key enabling URL-based OTP and custom-text sending; never an admin credential |
+| `HOST`                 | `127.0.0.1`                  | HTTP bind address; Compose sets `0.0.0.0` inside the container                         |
+| `PORT`                 | `3000`                       | HTTP port                                                                              |
+| `DATA_DIR`             | `./data`                     | Private session directory; Compose sets `/app/data`                                    |
+| `OTP_MESSAGE_TEMPLATE` | Default verification message | Fixed server-side text containing exactly one `{otp}`, maximum 1000 characters         |
+| `SEND_TIMEOUT_MS`      | `20000`                      | Submission deadline, 1000-60000 ms                                                     |
+| `RATE_LIMIT_MAX`       | `30`                         | Global send requests per minute, stored in memory and reset on process restart         |
+| `LOG_LEVEL`            | `info`                       | `info`, `warn`, `error`, or `silent`                                                   |
+| `API_DOMAIN`           | Example hostname             | Only used by the optional HTTPS Compose configuration                                  |
 
 Requests, raw URLs, tokens, QR data, phone numbers, and message bodies are not logged. Baileys logging is disabled; third-party `console` output is suppressed because libsignal can print session keys. Logs retain request IDs, route names, status codes, and connection state changes. History synchronization required by Baileys runs internally, but this application does not store or expose chats or incoming messages.
 

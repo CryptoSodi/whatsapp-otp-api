@@ -14,6 +14,12 @@ import type { WhatsAppGateway } from './gateway.js';
 import { ApiError } from './errors.js';
 
 const phonePattern = '^\\+[1-9][0-9]{6,14}$';
+const messageSchema = {
+  type: 'string',
+  minLength: 1,
+  maxLength: 1000,
+  pattern: '\\S',
+};
 function bearerAuth(secret: string) {
   const expected = createHash('sha256').update(secret).digest();
   return async (request: FastifyRequest, reply: FastifyReply) => {
@@ -63,10 +69,16 @@ export async function buildApp(
     requestId: string,
     input: { phone: string; otp: string },
   ) {
-    const messageId = await gateway.send(
-      input.phone,
-      config.messageTemplate.replace('{otp}', input.otp),
-    );
+    return submitMessage(requestId, {
+      phone: input.phone,
+      message: config.messageTemplate.replace('{otp}', input.otp),
+    });
+  }
+  async function submitMessage(
+    requestId: string,
+    input: { phone: string; message: string },
+  ) {
+    const messageId = await gateway.send(input.phone, input.message);
     return { status: 'submitted', messageId, requestId };
   }
   app.setNotFoundHandler((_request, reply) =>
@@ -111,7 +123,9 @@ export async function buildApp(
         error: {
           code: 'INVALID_REQUEST',
           message:
-            'Provide a phone in international +countrycode format and an OTP string of 4-10 digits, without extra fields.',
+            request.routeOptions.url === '/send-message'
+              ? 'Provide a phone in international +countrycode format and a non-blank message of 1-1000 characters, without extra fields.'
+              : 'Provide a phone in international +countrycode format and an OTP string of 4-10 digits, without extra fields.',
         },
         requestId: request.id,
       });
@@ -131,35 +145,36 @@ export async function buildApp(
   // Optional URL credential is separate from sending/admin bearer credentials.
   if (config.urlSendKey) {
     const expected = createHash('sha256').update(config.urlSendKey).digest();
+    const urlAuth = async (request: FastifyRequest, reply: FastifyReply) => {
+      reply.header('X-Robots-Tag', 'noindex, nofollow, noarchive');
+      const key = (request.query as { key?: unknown }).key;
+      const actual = createHash('sha256')
+        .update(typeof key === 'string' ? key : '')
+        .digest();
+      if (!timingSafeEqual(expected, actual)) {
+        return reply.code(401).send({
+          error: {
+            code: 'UNAUTHORIZED',
+            message: 'A valid URL key is required.',
+          },
+        });
+      }
+      const purpose = `${request.headers.purpose ?? ''} ${request.headers['sec-purpose'] ?? ''}`;
+      if (purpose.toLowerCase().includes('prefetch')) {
+        return reply.code(425).send({
+          error: {
+            code: 'PREFETCH_REJECTED',
+            message: 'Prefetch requests cannot send messages.',
+          },
+        });
+      }
+    };
     app.get<{ Querystring: { key: string; phone: string; otp: string } }>(
       '/send-otp',
       {
-        // A browser's HEAD probe must never submit an OTP.
+        // A browser's HEAD probe must never submit a message.
         exposeHeadRoute: false,
-        onRequest: async (request, reply) => {
-          reply.header('X-Robots-Tag', 'noindex, nofollow, noarchive');
-          const key = request.query.key;
-          const actual = createHash('sha256')
-            .update(typeof key === 'string' ? key : '')
-            .digest();
-          if (!timingSafeEqual(expected, actual)) {
-            return reply.code(401).send({
-              error: {
-                code: 'UNAUTHORIZED',
-                message: 'A valid URL key is required.',
-              },
-            });
-          }
-          const purpose = `${request.headers.purpose ?? ''} ${request.headers['sec-purpose'] ?? ''}`;
-          if (purpose.includes('prefetch')) {
-            return reply.code(425).send({
-              error: {
-                code: 'PREFETCH_REJECTED',
-                message: 'Prefetch requests cannot send OTPs.',
-              },
-            });
-          }
-        },
+        onRequest: urlAuth,
         preHandler: senderRateLimit,
         schema: {
           querystring: {
@@ -175,6 +190,27 @@ export async function buildApp(
         },
       },
       async (request) => submitOtp(request.id, request.query),
+    );
+    app.get<{ Querystring: { key: string; phone: string; message: string } }>(
+      '/send-message',
+      {
+        exposeHeadRoute: false,
+        onRequest: urlAuth,
+        preHandler: senderRateLimit,
+        schema: {
+          querystring: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['key', 'phone', 'message'],
+            properties: {
+              key: { type: 'string', minLength: 32, maxLength: 256 },
+              phone: { type: 'string', pattern: phonePattern },
+              message: messageSchema,
+            },
+          },
+        },
+      },
+      async (request) => submitMessage(request.id, request.query),
     );
   }
 
@@ -203,6 +239,26 @@ export async function buildApp(
         },
       },
       async (request) => submitOtp(request.id, request.body),
+    );
+    api.post<{ Body: { phone: string; message: string } }>(
+      '/send-message',
+      {
+        // Allow 1,000 Unicode characters including JSON escape overhead.
+        bodyLimit: 16384,
+        preHandler: senderRateLimit,
+        schema: {
+          body: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['phone', 'message'],
+            properties: {
+              phone: { type: 'string', pattern: phonePattern },
+              message: messageSchema,
+            },
+          },
+        },
+      },
+      async (request) => submitMessage(request.id, request.body),
     );
   });
 

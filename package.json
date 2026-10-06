@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "Self-hosted WhatsApp delivery API for caller-supplied OTPs",
+  "description": "Self-hosted WhatsApp delivery API for caller-supplied OTPs and custom text",
   "engines": {
     "node": ">=22.19.0"
   },
