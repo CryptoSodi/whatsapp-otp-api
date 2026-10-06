@@ -5,6 +5,7 @@ export interface Config {
   port: number;
   apiKey: string;
   adminKey: string;
+  urlSendKey?: string;
   dataDir: string;
   messageTemplate: string;
   sendTimeoutMs: number;
@@ -34,6 +35,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const adminKey = secret('ADMIN_KEY');
   if (apiKey === adminKey)
     throw new Error('API_KEY and ADMIN_KEY must be different.');
+  const urlSendKey = env.URL_SEND_KEY ? secret('URL_SEND_KEY') : undefined;
+  if (urlSendKey === apiKey || urlSendKey === adminKey)
+    throw new Error('URL_SEND_KEY must differ from API_KEY and ADMIN_KEY.');
   const messageTemplate =
     env.OTP_MESSAGE_TEMPLATE ??
     'Your verification code is {otp}. Do not share this code.';
@@ -54,6 +58,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     port: integer('PORT', 3000, 1, 65535),
     apiKey,
     adminKey,
+    urlSendKey,
     dataDir: resolve(env.DATA_DIR ?? './data'),
     messageTemplate,
     sendTimeoutMs: integer('SEND_TIMEOUT_MS', 20000, 1000, 60000),

@@ -1,6 +1,7 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import Fastify, {
   LogController,
+  type FastifyBaseLogger,
   type FastifyError,
   type FastifyReply,
   type FastifyRequest,
@@ -37,7 +38,7 @@ export async function buildApp(
   logger?: Logger,
 ) {
   const app = Fastify({
-    loggerInstance: logger,
+    loggerInstance: logger as FastifyBaseLogger | undefined,
     logController: new LogController({ disableRequestLogging: true }),
     bodyLimit: 2048,
     requestTimeout: 30000,
@@ -52,6 +53,22 @@ export async function buildApp(
     },
   });
   await app.register(rateLimit, { global: false, hook: 'preHandler' });
+  // Reuse one limiter so URL and POST sends share the same sender budget.
+  const senderRateLimit = app.rateLimit({
+    max: config.rateLimitMax,
+    timeWindow: '1 minute',
+    keyGenerator: () => 'sender',
+  });
+  async function submitOtp(
+    requestId: string,
+    input: { phone: string; otp: string },
+  ) {
+    const messageId = await gateway.send(
+      input.phone,
+      config.messageTemplate.replace('{otp}', input.otp),
+    );
+    return { status: 'submitted', messageId, requestId };
+  }
   app.setNotFoundHandler((_request, reply) =>
     reply
       .code(404)
@@ -60,6 +77,7 @@ export async function buildApp(
   app.addHook('onRequest', async (_request, reply) => {
     reply.header('Cache-Control', 'no-store');
     reply.header('X-Content-Type-Options', 'nosniff');
+    reply.header('Referrer-Policy', 'no-referrer');
   });
   app.addHook('onResponse', async (request, reply) => {
     // Never log raw URLs, authorization headers, request bodies or provider errors.
@@ -93,7 +111,7 @@ export async function buildApp(
         error: {
           code: 'INVALID_REQUEST',
           message:
-            'Provide a JSON body with a phone in international +countrycode format and an OTP string of 4-10 digits.',
+            'Provide a phone in international +countrycode format and an OTP string of 4-10 digits, without extra fields.',
         },
         requestId: request.id,
       });
@@ -110,6 +128,56 @@ export async function buildApp(
 
   app.get('/health', async () => ({ status: 'ok' }));
 
+  // Optional URL credential is separate from sending/admin bearer credentials.
+  if (config.urlSendKey) {
+    const expected = createHash('sha256').update(config.urlSendKey).digest();
+    app.get<{ Querystring: { key: string; phone: string; otp: string } }>(
+      '/send-otp',
+      {
+        // A browser's HEAD probe must never submit an OTP.
+        exposeHeadRoute: false,
+        onRequest: async (request, reply) => {
+          reply.header('X-Robots-Tag', 'noindex, nofollow, noarchive');
+          const key = request.query.key;
+          const actual = createHash('sha256')
+            .update(typeof key === 'string' ? key : '')
+            .digest();
+          if (!timingSafeEqual(expected, actual)) {
+            return reply.code(401).send({
+              error: {
+                code: 'UNAUTHORIZED',
+                message: 'A valid URL key is required.',
+              },
+            });
+          }
+          const purpose = `${request.headers.purpose ?? ''} ${request.headers['sec-purpose'] ?? ''}`;
+          if (purpose.includes('prefetch')) {
+            return reply.code(425).send({
+              error: {
+                code: 'PREFETCH_REJECTED',
+                message: 'Prefetch requests cannot send OTPs.',
+              },
+            });
+          }
+        },
+        preHandler: senderRateLimit,
+        schema: {
+          querystring: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['key', 'phone', 'otp'],
+            properties: {
+              key: { type: 'string', minLength: 32, maxLength: 256 },
+              phone: { type: 'string', pattern: phonePattern },
+              otp: { type: 'string', pattern: '^[0-9]{4,10}$' },
+            },
+          },
+        },
+      },
+      async (request) => submitOtp(request.id, request.query),
+    );
+  }
+
   await app.register(async (api) => {
     api.addHook('onRequest', bearerAuth(config.apiKey));
     api.get('/ready', async (_request, reply) => {
@@ -121,13 +189,7 @@ export async function buildApp(
     api.post<{ Body: { phone: string; otp: string } }>(
       '/send-otp',
       {
-        config: {
-          rateLimit: {
-            max: config.rateLimitMax,
-            timeWindow: '1 minute',
-            keyGenerator: () => 'sender',
-          },
-        },
+        preHandler: senderRateLimit,
         schema: {
           body: {
             type: 'object',
@@ -140,13 +202,7 @@ export async function buildApp(
           },
         },
       },
-      async (request) => {
-        const messageId = await gateway.send(
-          request.body.phone,
-          config.messageTemplate.replace('{otp}', request.body.otp),
-        );
-        return { status: 'submitted', messageId, requestId: request.id };
-      },
+      async (request) => submitOtp(request.id, request.body),
     );
   });
 

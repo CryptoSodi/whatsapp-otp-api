@@ -21,6 +21,127 @@ function fakeGateway() {
   return { gateway, sent };
 }
 
+const urlSendKey = 'c'.repeat(64);
+const sendUrl = (key = urlSendKey, otp = '001234') =>
+  `/send-otp?${new URLSearchParams({ key, phone: '+923074000106', otp })}`;
+
+test('URL sending is opt-in and requires its separate credential', async (t) => {
+  const { gateway, sent } = fakeGateway();
+  const disabled = await buildApp(config, gateway);
+  const app = await buildApp({ ...config, urlSendKey }, gateway);
+  t.after(() => Promise.all([disabled.close(), app.close()]));
+  assert.equal((await disabled.inject(sendUrl())).statusCode, 404);
+  for (const key of ['', 'invalid', config.apiKey, config.adminKey]) {
+    assert.equal((await app.inject(sendUrl(key))).statusCode, 401);
+  }
+  assert.equal(
+    (
+      await app.inject({
+        url: '/admin/session',
+        headers: { authorization: `Bearer ${urlSendKey}` },
+      })
+    ).statusCode,
+    401,
+  );
+  assert.equal(sent.length, 0);
+  const response = await app.inject(sendUrl());
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.json().status, 'submitted');
+  assert.equal(response.headers['cache-control'], 'no-store');
+  assert.equal(response.headers['referrer-policy'], 'no-referrer');
+  assert.deepEqual(sent, [
+    {
+      phone: '+923074000106',
+      text: 'Your verification code is 001234. Do not share this code.',
+    },
+  ]);
+});
+
+test('URL sending rejects malformed queries, HEAD and explicit prefetch without sending', async (t) => {
+  const { gateway, sent } = fakeGateway();
+  const app = await buildApp({ ...config, urlSendKey }, gateway);
+  t.after(() => app.close());
+  for (const url of [
+    sendUrl(urlSendKey, 'hello'),
+    `${sendUrl()}&message=hello`,
+    `${sendUrl()}&otp=654321`,
+    sendUrl().replace('%2B', '+'),
+  ]) {
+    assert.equal((await app.inject(url)).statusCode, 400);
+  }
+  assert.equal(
+    (await app.inject({ method: 'HEAD', url: sendUrl() })).statusCode,
+    404,
+  );
+  for (const headers of [
+    { purpose: 'prefetch' },
+    { 'sec-purpose': 'prefetch;prerender' },
+  ]) {
+    assert.equal(
+      (await app.inject({ url: sendUrl(), headers })).statusCode,
+      425,
+    );
+  }
+  assert.equal(sent.length, 0);
+});
+
+test('URL and POST sending share one rate limit in both directions', async (t) => {
+  for (const urlFirst of [true, false]) {
+    const { gateway, sent } = fakeGateway();
+    const app = await buildApp(
+      { ...config, urlSendKey, rateLimitMax: 1 },
+      gateway,
+    );
+    t.after(() => app.close());
+    const urlRequest = { method: 'GET' as const, url: sendUrl() };
+    const postRequest = {
+      method: 'POST' as const,
+      url: '/send-otp',
+      headers: senderHeaders,
+      payload: { phone: '+923074000106', otp: '123456' },
+    };
+    assert.equal(
+      (await app.inject(urlFirst ? urlRequest : postRequest)).statusCode,
+      200,
+    );
+    assert.equal(
+      (await app.inject(urlFirst ? postRequest : urlRequest)).statusCode,
+      429,
+    );
+    assert.equal(sent.length, 1);
+  }
+});
+
+test('URL credentials and OTP never appear in application logs or error responses', async (t) => {
+  let logs = '';
+  const logger = pino(
+    {},
+    new Writable({
+      write(chunk, _encoding, done) {
+        logs += chunk.toString();
+        done();
+      },
+    }),
+  );
+  const { gateway } = fakeGateway();
+  gateway.send = async () => {
+    throw new Error(`provider error ${urlSendKey} 007654`);
+  };
+  const app = await buildApp({ ...config, urlSendKey }, gateway, logger);
+  t.after(() => app.close());
+  const response = await app.inject(sendUrl(urlSendKey, '007654'));
+  assert.equal(response.statusCode, 500);
+  for (const secret of [
+    urlSendKey,
+    '007654',
+    '+923074000106',
+    '%2B923074000106',
+  ]) {
+    assert.ok(!logs.includes(secret));
+    assert.ok(!response.body.includes(secret));
+  }
+});
+
 test('requires the correct scoped key; health is public', async (t) => {
   const { gateway, sent } = fakeGateway();
   const app = await buildApp(config, gateway);

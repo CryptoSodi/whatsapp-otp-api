@@ -94,16 +94,27 @@ HTTP `200`:
 - No automatic OTP resubmission, message retry cache, durable message store, or idempotency guarantee. Repeating a successful request sends another message. Coordinate retries in your application.
 - A `502/504 SEND_UNCONFIRMED` can occur after WhatsApp accepted a message. **Do not blindly retry it**; your application owns resend and expiry decisions.
 
+### Optional single-URL sending
+
+Set `URL_SEND_KEY` to a separate random secret (32-256 letters, digits, underscores or hyphens) to enable GET sending. It must differ from both existing keys. Leave it unset to disable this route.
+
+```text
+http://otp.sirfbazar.com/send-otp?key=YOUR_URL_SEND_KEY&phone=%2B923074000106&otp=123456
+```
+
+Replace `otp` with the caller-generated code. `%2B` encodes the phone number's `+`. This sends the same fixed verification template as POST; arbitrary messages are not accepted. It shares POST's rate limit. HEAD and marked prefetch requests cannot send messages. Opening or refreshing the URL submits another request; unmarked link previews can also call it, so keep the complete URL private and do not embed it in pages or share it with preview services. The URL key and OTP can appear in browser history and infrastructure logs even though this application does not log them. The current Oracle origin is HTTP; use encrypted transport for real credentials and OTPs. POST remains available for backend integrations.
+
 ### Routes
 
-| Method | Route                 | Authorization | Purpose                                      |
-| ------ | --------------------- | ------------- | -------------------------------------------- |
-| POST   | `/send-otp`           | API key       | Send the supplied OTP                        |
-| GET    | `/health`             | Public        | Process liveness, independent of WhatsApp    |
-| GET    | `/ready`              | API key       | HTTP 200 when connected, otherwise 503       |
-| GET    | `/admin/session`      | Admin key     | Connection state                             |
-| GET    | `/admin/qr`           | Admin key     | Current pairing QR as SVG                    |
-| POST   | `/admin/pairing-code` | Admin key     | Pair sender account using `{"phone":"+..."}` |
+| Method | Route                 | Authorization    | Purpose                                      |
+| ------ | --------------------- | ---------------- | -------------------------------------------- |
+| POST   | `/send-otp`           | API key          | Send the supplied OTP                        |
+| GET    | `/send-otp`           | URL key in query | Optional URL-based OTP send                  |
+| GET    | `/health`             | Public           | Process liveness, independent of WhatsApp    |
+| GET    | `/ready`              | API key          | HTTP 200 when connected, otherwise 503       |
+| GET    | `/admin/session`      | Admin key        | Connection state                             |
+| GET    | `/admin/qr`           | Admin key        | Current pairing QR as SVG                    |
+| POST   | `/admin/pairing-code` | Admin key        | Pair sender account using `{"phone":"+..."}` |
 
 Connection states: `connecting`, `awaiting_pairing`, `connected`, `reconnecting`, `logged_out`, `error`, `stopped`.
 
@@ -175,6 +186,7 @@ HTTP health checks measure process liveness. Monitor `/ready` separately for Wha
 | ---------------------- | ---------------------------- | ------------------------------------------------------------------------------ |
 | `API_KEY`              | Required                     | 32-256 letters/digits/underscores/hyphens; backend send credential             |
 | `ADMIN_KEY`            | Required                     | Separate key with the same format; account pairing credential                  |
+| `URL_SEND_KEY`         | Unset (disabled)             | Separate key enabling URL-based OTP sending; never an admin credential         |
 | `HOST`                 | `127.0.0.1`                  | HTTP bind address; Compose sets `0.0.0.0` inside the container                 |
 | `PORT`                 | `3000`                       | HTTP port                                                                      |
 | `DATA_DIR`             | `./data`                     | Private session directory; Compose sets `/app/data`                            |

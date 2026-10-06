@@ -9,6 +9,14 @@ test('configuration fails closed for missing/shared keys and invalid settings', 
   assert.throws(() => loadConfig({}));
   assert.throws(() => loadConfig({ ...env, ADMIN_KEY: env.API_KEY }));
   assert.throws(() => loadConfig({ ...env, API_KEY: 'short' }));
+  assert.throws(() => loadConfig({ ...env, URL_SEND_KEY: 'short' }));
+  assert.throws(() => loadConfig({ ...env, URL_SEND_KEY: env.API_KEY }));
+  assert.throws(() => loadConfig({ ...env, URL_SEND_KEY: env.ADMIN_KEY }));
+  assert.equal(loadConfig(env).urlSendKey, undefined);
+  assert.equal(
+    loadConfig({ ...env, URL_SEND_KEY: 'c'.repeat(64) }).urlSendKey,
+    'c'.repeat(64),
+  );
   assert.throws(() => loadConfig({ ...env, PORT: 'NaN' }));
   assert.throws(() => loadConfig({ ...env, SEND_TIMEOUT_MS: '0' }));
   assert.throws(() =>
