@@ -72,3 +72,43 @@ test('rolls back the entire key batch on an invalid write', async () => {
     store.close();
   }
 });
+
+test('reset persists a fresh identity and rejects writes from the old socket auth state', async () => {
+  const temp = temporaryDirectory();
+  const filename = join(temp.path, 'session.sqlite');
+  let store = openAuthStore(filename);
+  try {
+    const old = store.state;
+    old.creds.registered = true;
+    store.saveCreds();
+    await old.keys.set({ session: { old: Buffer.from('old-session') } });
+    store.reset();
+    const freshKey = Buffer.from(store.state.creds.noiseKey.private);
+    assert.equal(store.state.creds.registered, false);
+    assert.notDeepEqual(freshKey, old.creds.noiseKey.private);
+    await old.keys.set({ session: { stale: Buffer.from('late-write') } });
+    assert.deepEqual(await old.keys.get('session', ['old']), {});
+    assert.deepEqual(
+      await store.state.keys.get('session', ['old', 'stale']),
+      {},
+    );
+    await store.state.keys.set({
+      session: { new: Buffer.from('new-session') },
+    });
+    store.close();
+    store = openAuthStore(filename);
+    assert.equal(store.state.creds.registered, false);
+    assert.deepEqual(store.state.creds.noiseKey.private, freshKey);
+    assert.deepEqual(
+      (await store.state.keys.get('session', ['new'])).new,
+      Buffer.from('new-session'),
+    );
+    assert.deepEqual(
+      await store.state.keys.get('session', ['old', 'stale']),
+      {},
+    );
+  } finally {
+    store.close();
+    temp.cleanup();
+  }
+});

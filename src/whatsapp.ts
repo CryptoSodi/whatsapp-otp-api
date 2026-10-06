@@ -26,6 +26,7 @@ export class WhatsAppClient implements WhatsAppGateway {
   private stopped = true;
   private sending = false;
   private pairing = false;
+  private resetting = false;
 
   constructor(
     private readonly config: Pick<Config, 'sendTimeoutMs'>,
@@ -276,6 +277,60 @@ export class WhatsAppClient implements WhatsAppGateway {
         'PAIRING_FAILED',
         'Could not obtain a pairing code. Check session status before retrying.',
       );
+    }
+  }
+
+  async resetSession() {
+    if (this.resetting || this.sending || this.pairing) {
+      throw new ApiError(
+        409,
+        'SESSION_BUSY',
+        'A send, pairing, or reset is in progress. Try again when it finishes.',
+      );
+    }
+    this.resetting = true;
+    this.stopped = true;
+    clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = undefined;
+    const socket = this.socket;
+    this.socket = undefined;
+    this.qrValue = undefined;
+    this.state = 'stopped';
+    let timeout: NodeJS.Timeout | undefined;
+    try {
+      if (socket) {
+        await Promise.race([
+          socket.end(undefined),
+          new Promise<never>((_resolve, reject) => {
+            timeout = setTimeout(
+              () => reject(new Error('Close timed out')),
+              5000,
+            );
+          }),
+        ]);
+      }
+      this.auth.reset();
+      this.attempts = 0;
+      this.stopped = false;
+      this.connect();
+      this.logger.info(
+        'WhatsApp login reset by an administrator; fresh pairing required',
+      );
+      return this.status();
+    } catch {
+      this.state = 'error';
+      this.logger.error(
+        'Session reset failed; stopping to preserve a consistent auth store',
+      );
+      this.onFatal();
+      throw new ApiError(
+        503,
+        'RESET_FAILED',
+        'The session could not be reset safely. Check status after the service restarts.',
+      );
+    } finally {
+      clearTimeout(timeout);
+      this.resetting = false;
     }
   }
 

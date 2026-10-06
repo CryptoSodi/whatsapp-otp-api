@@ -1,6 +1,6 @@
 {$API_DOMAIN} {
     # Only the delivery and health routes are exposed publicly.
-    @public path /send-otp /send-message /health /ready
+    @public path /send-otp /send-message /health /ready /pair /pair/app.js /admin/session /admin/qr /admin/pairing-code /admin/reset
     handle @public {
         reverse_proxy api:3000
     }

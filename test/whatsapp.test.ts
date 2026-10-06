@@ -74,6 +74,90 @@ function fixture(timeout = 1000) {
 const hasCode = (code: string) => (error: unknown) =>
   error instanceof ApiError && error.code === code;
 
+test('reset closes the old socket, rotates credentials and ignores old events', async () => {
+  const f = fixture();
+  try {
+    const old = f.sockets[0]!;
+    f.auth.state.creds.registered = true;
+    old.ev.emit('connection.update', { connection: 'open' });
+    const identity = Buffer.from(f.auth.state.creds.noiseKey.private);
+    assert.deepEqual(await f.client.resetSession(), { state: 'connecting' });
+    assert.equal(old.ended, true);
+    assert.equal(f.sockets.length, 2);
+    assert.equal(f.auth.state.creds.registered, false);
+    assert.notDeepEqual(f.auth.state.creds.noiseKey.private, identity);
+    old.ev.emit('connection.update', { connection: 'open', qr: 'stale' });
+    old.ev.emit('creds.update', {});
+    assert.equal(f.client.status().state, 'connecting');
+    assert.equal(f.client.qr(), undefined);
+    f.sockets[1]!.ev.emit('connection.update', { qr: 'fresh-qr' });
+    assert.equal(f.client.qr(), 'fresh-qr');
+    assert.equal(f.client.status().state, 'awaiting_pairing');
+  } finally {
+    await f.close();
+  }
+});
+
+test('reset refuses an in-flight send and concurrent resets', async () => {
+  const f = fixture();
+  try {
+    const old = f.sockets[0]!;
+    old.ev.emit('connection.update', { connection: 'open' });
+    let lookup!: (value: { jid: string; exists: boolean }[]) => void;
+    old.socket.onWhatsApp = () =>
+      new Promise((resolve) => {
+        lookup = resolve;
+      });
+    const send = f.client.send('+923001234567', 'hello');
+    await assert.rejects(f.client.resetSession(), hasCode('SESSION_BUSY'));
+    assert.equal(old.ended, false);
+    lookup([{ jid: 'recipient', exists: true }]);
+    await send;
+    let close!: () => void;
+    old.socket.end = () =>
+      new Promise((resolve) => {
+        close = resolve;
+      });
+    const reset = f.client.resetSession();
+    await assert.rejects(f.client.resetSession(), hasCode('SESSION_BUSY'));
+    await assert.rejects(
+      f.client.send('+923001234567', 'hello'),
+      hasCode('WHATSAPP_UNAVAILABLE'),
+    );
+    close();
+    await reset;
+    assert.equal(f.sockets.length, 2);
+  } finally {
+    await f.close();
+  }
+});
+
+test('reset refuses an in-flight pairing request and stops safely on storage failure', async () => {
+  const f = fixture();
+  try {
+    const old = f.sockets[0]!;
+    old.ev.emit('connection.update', { qr: 'qr' });
+    let finish!: (code: string) => void;
+    old.socket.requestPairingCode = () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      });
+    const pair = f.client.pairingCode('+923001234567');
+    await assert.rejects(f.client.resetSession(), hasCode('SESSION_BUSY'));
+    finish('ABCDEFGH');
+    await pair;
+    f.auth.reset = () => {
+      throw new Error('storage failure');
+    };
+    await assert.rejects(f.client.resetSession(), hasCode('RESET_FAILED'));
+    assert.equal(f.fatal(), true);
+    assert.equal(f.sockets.length, 1);
+    assert.equal(f.client.status().state, 'error');
+  } finally {
+    await f.close();
+  }
+});
+
 test('only sends while connected and sends to the looked-up WhatsApp JID', async () => {
   const f = fixture();
   try {

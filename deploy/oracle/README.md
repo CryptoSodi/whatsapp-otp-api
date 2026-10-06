@@ -18,7 +18,9 @@ This VM also runs Viddownhub and a GitHub runner for another repository. Caddy o
 
 DNS points `otp.sirfbazar.com` at this VM. No new Oracle ingress rule is needed for the existing open port 80. Do not expose port 3300 or 8080. If changing Viddownhub's deployment process, preserve `PORT=8080`; its current `pm2 restart ... --update-env` retains that setting when the runner does not override it. A fresh PM2 creation must set the port explicitly.
 
-Admin routes remain private. To reach them, tunnel local port 3300 to the VM's port 3300:
+Browser pairing is available at **http://otp.sirfbazar.com/pair**. Enter `ADMIN_KEY` to view status/QR, request a pairing code, or explicitly reset the saved login. The key is retained only in tab memory; sending keys cannot perform these actions. This deployment uses HTTP, so browser pairing credentials and QR data travel unencrypted. The proxy exposes only the listed admin routes, and each requires bearer authentication.
+
+For optional encrypted SSH access, tunnel local port 3300 to the VM's port 3300, then open `http://127.0.0.1:3300/pair`:
 
 ```sh
 ssh -i /path/to/oci.key -N -L 3300:127.0.0.1:3300 ubuntu@193.122.227.40

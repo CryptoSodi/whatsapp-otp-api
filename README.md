@@ -23,7 +23,13 @@ For development, use `npm run dev` instead of the build/start commands. The HTTP
 
 ## Link your WhatsApp account
 
-Use a dedicated sender account. The **admin key** controls pairing; the **API key** only permits sending and readiness checks. Keep admin routes on localhost or access them over an SSH tunnel.
+Use a dedicated sender account. The **admin key** controls pairing and session resets; sending keys do not grant admin access.
+
+**Pair in your browser:** open `http://otp.sirfbazar.com/pair` and enter `ADMIN_KEY`. The page displays the connection state, updates the QR automatically, and can request a phone-number pairing code. Scan through WhatsApp → Linked devices → Link a device. No Oracle login is needed.
+
+If relinking is necessary, choose **Reset login and get a new QR** and confirm. Reset clears this API's saved WhatsApp identity and Signal keys; sending pauses until pairing finishes. It refuses to interrupt an active send or pairing request. Remove an old device entry from WhatsApp's Linked devices if it remains listed. Do not reset a connected account just to check its status.
+
+The page keeps the key only in tab memory, sends it in an Authorization header, and clears it on Lock or page close. It uses no cookies or browser storage for authentication. The current Oracle endpoint is HTTP, so the key and pairing data are unencrypted in transit; HTTPS or the optional SSH tunnel below provides encrypted access. The page itself is public; all admin API calls still require `ADMIN_KEY`.
 
 The following examples use Bash. Load the generated `.env` in a trusted local shell:
 
@@ -127,17 +133,19 @@ All four sending routes share one rate limit and the same single-send guard. The
 
 ### Routes
 
-| Method | Route                 | Authorization    | Purpose                                      |
-| ------ | --------------------- | ---------------- | -------------------------------------------- |
-| POST   | `/send-otp`           | API key          | Send the supplied OTP                        |
-| GET    | `/send-otp`           | URL key in query | Optional URL-based OTP send                  |
-| POST   | `/send-message`       | API key          | Send custom text                             |
-| GET    | `/send-message`       | URL key in query | Optional URL-based custom text send          |
-| GET    | `/health`             | Public           | Process liveness, independent of WhatsApp    |
-| GET    | `/ready`              | API key          | HTTP 200 when connected, otherwise 503       |
-| GET    | `/admin/session`      | Admin key        | Connection state                             |
-| GET    | `/admin/qr`           | Admin key        | Current pairing QR as SVG                    |
-| POST   | `/admin/pairing-code` | Admin key        | Pair sender account using `{"phone":"+..."}` |
+| Method | Route                 | Authorization                      | Purpose                                                 |
+| ------ | --------------------- | ---------------------------------- | ------------------------------------------------------- |
+| POST   | `/send-otp`           | API key                            | Send the supplied OTP                                   |
+| GET    | `/send-otp`           | URL key in query                   | Optional URL-based OTP send                             |
+| POST   | `/send-message`       | API key                            | Send custom text                                        |
+| GET    | `/send-message`       | URL key in query                   | Optional URL-based custom text send                     |
+| GET    | `/health`             | Public                             | Process liveness, independent of WhatsApp               |
+| GET    | `/ready`              | API key                            | HTTP 200 when connected, otherwise 503                  |
+| GET    | `/admin/session`      | Admin key                          | Connection state                                        |
+| GET    | `/admin/qr`           | Admin key                          | Current pairing QR as SVG                               |
+| POST   | `/admin/pairing-code` | Admin key                          | Pair sender account using `{"phone":"+..."}`            |
+| POST   | `/admin/reset`        | Admin key                          | Clear login with `{"confirm":"RESET_WHATSAPP_SESSION"}` |
+| GET    | `/pair`               | Public page; admin key for actions | Browser pairing and session controls                    |
 
 Connection states: `connecting`, `awaiting_pairing`, `connected`, `reconnecting`, `logged_out`, `error`, `stopped`.
 
@@ -183,9 +191,9 @@ Point a DNS hostname to the VM's public IP and set `API_DOMAIN=otp.yourdomain.co
 docker compose -f compose.yaml -f compose.https.yaml up -d --build
 ```
 
-Caddy obtains and renews HTTPS certificates. The supplied configuration exposes only `/send-otp`, `/send-message`, `/health`, and `/ready`; admin routes return 404 through the public proxy. Use `https://otp.yourdomain.com/send-otp` or `/send-message` in your application.
+Caddy obtains and renews HTTPS certificates. The supplied configuration exposes sending/health routes, `/pair`, its script, and the four authenticated admin routes (`session`, `qr`, `pairing-code`, `reset`). Unlisted routes return 404. Use `https://otp.yourdomain.com/pair` to manage pairing in your browser.
 
-For pairing from your computer, create an SSH tunnel:
+For optional private access from your computer, create an SSH tunnel:
 
 ```sh
 ssh -N -L 3000:127.0.0.1:3000 YOUR_SSH_USER@YOUR_VM_IP
@@ -197,7 +205,7 @@ Then use the localhost pairing commands above with the **VM's admin key**. If lo
 
 `data/session.sqlite` locally, or `/app/data/session.sqlite` in Docker, stores WhatsApp credentials, encryption keys, and recipient mappings. **It never stores OTP request bodies.** Treat the database and its SQLite companion files as account credentials. Files use restricted Unix permissions; protect VM disks and backups too.
 
-Transient disconnects reconnect with capped exponential backoff. Logout, account rejection, invalid sessions, or another client replacing this connection stop automatic reconnection and require operator attention. Stop conflicting deployments first. If re-linking is required, stop the service and move its session database plus any `-wal` and `-shm` companions to a private backup location, then restart with an empty session directory. Never alter the database while the service is running. In Docker, use a **new named session volume** to re-link while preserving the original volume for recovery.
+Transient disconnects reconnect with capped exponential backoff. Logout, account rejection, invalid sessions, or another client replacing this connection stop automatic reconnection and require operator attention. Stop conflicting deployments first. If re-linking is required, use the confirmed reset action on `/pair`. Reset disconnects the old socket and replaces credentials atomically; stale callbacks cannot write into the fresh authentication state. For manual recovery with a backup, stop the service before moving its database and any `-wal` and `-shm` companions. Never alter the database externally while the service is running.
 
 `docker compose down` preserves the session volume. **`docker compose down -v` deletes it** and requires account re-linking. The service does not offer a remote logout/delete-session endpoint.
 

@@ -12,6 +12,7 @@ import type { Logger } from 'pino';
 import type { Config } from './config.js';
 import type { WhatsAppGateway } from './gateway.js';
 import { ApiError } from './errors.js';
+import { pairPage, pairScript } from './pair-page.js';
 
 const phonePattern = '^\\+[1-9][0-9]{6,14}$';
 const messageSchema = {
@@ -123,9 +124,11 @@ export async function buildApp(
         error: {
           code: 'INVALID_REQUEST',
           message:
-            request.routeOptions.url === '/send-message'
-              ? 'Provide a phone in international +countrycode format and a non-blank message of 1-1000 characters, without extra fields.'
-              : 'Provide a phone in international +countrycode format and an OTP string of 4-10 digits, without extra fields.',
+            request.routeOptions.url === '/admin/reset'
+              ? 'Reset requires the explicit confirmation RESET_WHATSAPP_SESSION.'
+              : request.routeOptions.url === '/send-message'
+                ? 'Provide a phone in international +countrycode format and a non-blank message of 1-1000 characters, without extra fields.'
+                : 'Provide a phone in international +countrycode format and an OTP string of 4-10 digits, without extra fields.',
         },
         requestId: request.id,
       });
@@ -141,6 +144,20 @@ export async function buildApp(
   });
 
   app.get('/health', async () => ({ status: 'ok' }));
+  app.get('/pair', async (_request, reply) =>
+    reply
+      .header(
+        'Content-Security-Policy',
+        "default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; img-src 'self' blob:; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+      )
+      .header('X-Frame-Options', 'DENY')
+      .header('X-Robots-Tag', 'noindex, nofollow, noarchive')
+      .type('text/html; charset=utf-8')
+      .send(pairPage),
+  );
+  app.get('/pair/app.js', async (_request, reply) =>
+    reply.type('text/javascript; charset=utf-8').send(pairScript),
+  );
 
   // Optional URL credential is separate from sending/admin bearer credentials.
   if (config.urlSendKey) {
@@ -266,6 +283,47 @@ export async function buildApp(
     async (admin) => {
       admin.addHook('onRequest', bearerAuth(config.adminKey));
       admin.get('/session', async () => gateway.status());
+      admin.post<{ Body: { confirm: 'RESET_WHATSAPP_SESSION' } }>(
+        '/reset',
+        {
+          config: {
+            rateLimit: {
+              max: 2,
+              timeWindow: '1 minute',
+              keyGenerator: () => 'session-reset',
+            },
+          },
+          schema: {
+            body: {
+              type: 'object',
+              additionalProperties: false,
+              required: ['confirm'],
+              properties: {
+                confirm: { type: 'string', enum: ['RESET_WHATSAPP_SESSION'] },
+              },
+            },
+          },
+          preHandler: async (request, reply) => {
+            // Browser resets must originate on this host and use bearer auth.
+            if (request.headers.origin) {
+              let sameHost = false;
+              try {
+                sameHost =
+                  new URL(request.headers.origin).host === request.headers.host;
+              } catch {}
+              if (!sameHost)
+                return reply.code(403).send({
+                  error: {
+                    code: 'ORIGIN_REJECTED',
+                    message:
+                      'Reset must be requested from the pairing page on this host.',
+                  },
+                });
+            }
+          },
+        },
+        async () => gateway.resetSession(),
+      );
       admin.get(
         '/qr',
         {

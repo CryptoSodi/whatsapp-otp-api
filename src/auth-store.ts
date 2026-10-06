@@ -32,45 +32,78 @@ export function openAuthStore(filename: string) {
       ? JSON.parse(row.value as string, BufferJSON.reviver)
       : undefined;
   }
-  const state: AuthenticationState = {
-    creds: read('credentials', 'current') ?? initAuthCreds(),
-    keys: {
-      async get<T extends keyof SignalDataTypeMap>(type: T, ids: string[]) {
-        const result: { [id: string]: SignalDataTypeMap[T] } = {};
-        for (const id of ids) {
-          let value = read(type, id);
-          if (value !== undefined) {
-            if (type === 'app-state-sync-key')
-              value = proto.Message.AppStateSyncKeyData.fromObject(value);
-            result[id] = value;
-          }
-        }
-        return result;
-      },
-      async set(data) {
-        db.exec('BEGIN IMMEDIATE');
-        try {
-          for (const [category, values] of Object.entries(data)) {
-            for (const [id, value] of Object.entries(values ?? {})) {
-              if (value == null) remove.run(category, id);
-              else
-                put.run(
-                  category,
-                  id,
-                  JSON.stringify(value, BufferJSON.replacer),
-                );
+  let generation = 0;
+  function createState(
+    creds: AuthenticationState['creds'],
+    version: number,
+  ): AuthenticationState {
+    return {
+      creds,
+      keys: {
+        async get<T extends keyof SignalDataTypeMap>(type: T, ids: string[]) {
+          const result: { [id: string]: SignalDataTypeMap[T] } = {};
+          if (version !== generation) return result;
+          for (const id of ids) {
+            let value = read(type, id);
+            if (value !== undefined) {
+              if (type === 'app-state-sync-key')
+                value = proto.Message.AppStateSyncKeyData.fromObject(value);
+              result[id] = value;
             }
           }
-          db.exec('COMMIT');
-        } catch (error) {
-          db.exec('ROLLBACK');
-          throw error;
-        }
+          return result;
+        },
+        async set(data) {
+          // A closed socket must not repopulate a newly reset session.
+          if (version !== generation) return;
+          db.exec('BEGIN IMMEDIATE');
+          try {
+            for (const [category, values] of Object.entries(data)) {
+              for (const [id, value] of Object.entries(values ?? {})) {
+                if (value == null) remove.run(category, id);
+                else
+                  put.run(
+                    category,
+                    id,
+                    JSON.stringify(value, BufferJSON.replacer),
+                  );
+              }
+            }
+            db.exec('COMMIT');
+          } catch (error) {
+            db.exec('ROLLBACK');
+            throw error;
+          }
+        },
       },
-    },
-  };
+    };
+  }
+  let state = createState(
+    read('credentials', 'current') ?? initAuthCreds(),
+    generation,
+  );
   return {
-    state,
+    get state() {
+      return state;
+    },
+    reset() {
+      const next = createState(initAuthCreds(), generation + 1);
+      db.exec('BEGIN IMMEDIATE');
+      try {
+        db.exec('DELETE FROM auth');
+        put.run(
+          'credentials',
+          'current',
+          JSON.stringify(next.creds, BufferJSON.replacer),
+        );
+        db.exec('COMMIT');
+      } catch (error) {
+        db.exec('ROLLBACK');
+        throw error;
+      }
+      generation++;
+      state = next;
+    },
     saveCreds() {
       put.run(
         'credentials',

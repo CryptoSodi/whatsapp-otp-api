@@ -16,6 +16,7 @@ function fakeGateway() {
     status: () => ({ state: 'connected' }),
     qr: () => undefined,
     pairingCode: async () => 'ABCD1234',
+    resetSession: async () => ({ state: 'connecting' }),
     send: async (phone, text) => {
       sent.push({ phone, text });
       return 'message-123';

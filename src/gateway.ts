@@ -11,5 +11,6 @@ export interface WhatsAppGateway {
   status(): { state: SessionState };
   qr(): string | undefined;
   pairingCode(phone: string): Promise<string>;
+  resetSession(): Promise<{ state: SessionState }>;
   send(phone: string, text: string): Promise<string>;
 }
