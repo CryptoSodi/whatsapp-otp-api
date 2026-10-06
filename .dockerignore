@@ -1,0 +1,12 @@
+node_modules
+dist
+.git
+.github
+.env
+.env.*
+data
+test
+*.log
+*.sqlite*
+whatsapp-qr.svg
+.test-output

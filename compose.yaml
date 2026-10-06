@@ -1,0 +1,24 @@
+services:
+  api:
+    build: .
+    restart: unless-stopped
+    init: true
+    env_file: .env
+    environment:
+      HOST: 0.0.0.0
+      PORT: 3000
+      DATA_DIR: /app/data
+    ports:
+      - '127.0.0.1:3000:3000'
+    volumes:
+      - whatsapp_session:/app/data
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    stop_grace_period: 35s
+volumes:
+  whatsapp_session:

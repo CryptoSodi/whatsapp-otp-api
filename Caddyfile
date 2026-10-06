@@ -1,0 +1,10 @@
+{$API_DOMAIN} {
+    # Only the delivery and health routes are exposed publicly.
+    @public path /send-otp /health /ready
+    handle @public {
+        reverse_proxy api:3000
+    }
+    handle {
+        respond "Not found" 404
+    }
+}

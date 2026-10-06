@@ -1,0 +1,14 @@
+node_modules/
+dist/
+coverage/
+.env
+.env.*
+!.env.example
+data/
+*.sqlite*
+*.db*
+*.log
+whatsapp-qr.svg
+.DS_Store
+.codex/
+.test-output/

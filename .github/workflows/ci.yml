@@ -1,0 +1,50 @@
+name: CI
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm run format:check
+      - run: npm run check
+      - run: npm run smoke
+      - run: npm audit --omit=dev --audit-level=high
+  container:
+    strategy:
+      matrix:
+        runner: [ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build container
+        run: docker build -t whatsapp-otp-api:test .
+      - name: Check container health
+        shell: bash
+        run: |
+          docker run -d --name otp-smoke -p 127.0.0.1:3000:3000 \
+            --read-only --tmpfs /tmp:rw,noexec,nosuid,size=64m \
+            --mount type=volume,destination=/app/data \
+            --cap-drop ALL --security-opt no-new-privileges:true \
+            -e API_KEY="$(openssl rand -hex 32)" \
+            -e ADMIN_KEY="$(openssl rand -hex 32)" \
+            whatsapp-otp-api:test
+          for attempt in {1..30}; do
+            if curl --fail --silent http://127.0.0.1:3000/health; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs otp-smoke
+          exit 1
+      - name: Stop container
+        if: always()
+        run: docker rm -f otp-smoke || true
