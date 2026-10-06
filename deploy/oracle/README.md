@@ -1,22 +1,22 @@
 # Oracle deployment
 
-Production URL: **https://otp.sirfbazar.com**.
+Oracle URL: **http://otp.sirfbazar.com**. This configuration uses HTTP on port 80, as requested. It does not provide TLS between callers and the VM. HTTPS requires a separate TLS configuration or secure tunnel; a Cloudflare edge certificate alone does not encrypt an HTTP origin connection.
 
-This VM also runs an existing application on port 80 and a GitHub runner for another repository. The OTP deployment uses its own systemd units and private Node runtime. It does not use or restart the other application's PM2 process, runner, or system Node installation.
+This VM also runs Viddownhub and a GitHub runner for another repository. Caddy owns port 80 and routes `otp.sirfbazar.com` to the OTP API on 3300; all other hosts retain the existing website through port 8080. Viddownhub stays under its existing PM2 process name with `PORT=8080` saved in PM2. The OTP deployment uses its own systemd unit and private Node runtime. Automatic OTP releases do not restart the proxy, Viddownhub, runner, or shared Node installation.
 
 ## Layout
 
 - `/opt/whatsapp-otp-api/runtime`: private Node 22 runtime, root-managed.
-- `/opt/whatsapp-otp-api/bin`: root-managed deploy helper, safe archive extractor, Caddy binary, and firewall helper.
+- `/opt/whatsapp-otp-api/bin`: root-managed deploy helper, safe archive extractor, and Caddy binary.
 - `/opt/whatsapp-otp-api/releases`: immutable application releases containing compiled JS and Linux production dependencies.
 - `/opt/whatsapp-otp-api/deploy/current`: symlink to the active release.
 - `/opt/whatsapp-otp-api/data`: persistent WhatsApp session database; never part of a release.
 - `/etc/whatsapp-otp-api.env`: private server environment; never part of a release.
 - `whatsapp-otp-api.service`: API on **127.0.0.1:3300**, running as `otpapi`.
-- `whatsapp-otp-proxy.service`: HTTPS on **443 only**, running as `otpproxy`.
-- `whatsapp-otp-firewall.service`: adds/removes only the dedicated TCP 443 allow rule.
+- `whatsapp-otp-proxy.service`: shared domain routing on **80**, running as `otpproxy`.
+- PM2 `viddownhub`: existing website on **8080**, reached through Caddy. The server firewall keeps this backend port inaccessible from the internet.
 
-The proxy obtains and renews certificates using TLS-ALPN on port 443. DNS must point `otp.sirfbazar.com` at this VM, and Oracle's ingress rules must allow TCP 443. Keep the DNS record unproxied for this certificate challenge. Port 80 is reserved for the existing application; always use the HTTPS URL directly.
+DNS points `otp.sirfbazar.com` at this VM. No new Oracle ingress rule is needed for the existing open port 80. Do not expose port 3300 or 8080. If changing Viddownhub's deployment process, preserve `PORT=8080`; its current `pm2 restart ... --update-env` retains that setting when the runner does not override it. A fresh PM2 creation must set the port explicitly.
 
 Admin routes remain private. To reach them, tunnel local port 3300 to the VM's port 3300:
 
@@ -40,7 +40,7 @@ Deployment uses an exclusive lock, validates the archive and commit SHA, switche
 
 Expect a brief OTP API interruption and WhatsApp reconnection during each release. An in-flight send can have an uncertain outcome; do not blindly retry. Monitor `/ready` separately from the deployment's process health check.
 
-Host files under `/etc` and `/opt/whatsapp-otp-api/bin`, the runtime, firewall, and proxy configuration are managed separately by the administrator. Pushing changes to the application does not grant CI permission to replace those files or alter other services.
+Host files under `/etc` and `/opt/whatsapp-otp-api/bin`, the runtime, and shared proxy configuration are managed separately by the administrator. Pushing changes to the application does not grant CI permission to replace those files or alter other services.
 
 ## Operations
 
@@ -48,7 +48,7 @@ Host files under `/etc` and `/opt/whatsapp-otp-api/bin`, the runtime, firewall, 
 sudo systemctl status whatsapp-otp-api whatsapp-otp-proxy --no-pager
 sudo journalctl -u whatsapp-otp-api -n 50 --no-pager
 cat /opt/whatsapp-otp-api/deploy/deployed-revision
-curl --fail https://otp.sirfbazar.com/health
+curl --fail http://otp.sirfbazar.com/health
 ```
 
 Manual rollback: select a known-good directory inside `/opt/whatsapp-otp-api/releases`, update the `deploy/current` symlink while holding `deploy/deployment.lock`, then restart only `whatsapp-otp-api.service`. No database rollback is performed automatically. Back up the private session database and environment separately, and preserve compatibility when changing the authentication schema.

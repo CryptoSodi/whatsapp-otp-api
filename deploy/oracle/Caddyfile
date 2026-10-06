@@ -1,24 +1,24 @@
 {
     admin off
-    auto_https disable_redirects
+    auto_https off
     servers {
         protocols h1 h2
     }
 }
 
-https://otp.sirfbazar.com {
-    # Port 80 belongs to an existing application. Only use the TLS challenge on 443.
-    tls {
-        issuer acme {
-            dir https://acme-v02.api.letsencrypt.org/directory
-            disable_http_challenge
+:80 {
+    @otp host otp.sirfbazar.com
+    handle @otp {
+        @public path /send-otp /health /ready
+        handle @public {
+            reverse_proxy 127.0.0.1:3300
+        }
+        handle {
+            respond "Not found" 404
         }
     }
-    @public path /send-otp /health /ready
-    handle @public {
-        reverse_proxy 127.0.0.1:3300
-    }
+    # Preserve the existing website for its domains and direct-IP requests.
     handle {
-        respond "Not found" 404
+        reverse_proxy 127.0.0.1:8080
     }
 }

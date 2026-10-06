@@ -18,7 +18,7 @@ jobs:
       - run: npm run format:check
       - run: npm run check
       - run: npm run smoke
-      - run: bash -n deploy/oracle/install.sh deploy/oracle/deploy.sh deploy/oracle/firewall.sh
+      - run: bash -n deploy/oracle/install.sh deploy/oracle/deploy.sh
       - run: python3 -m unittest discover -s deploy/oracle -p 'test_*.py'
       - run: npm audit --omit=dev --audit-level=high
       - name: Package production release
@@ -26,7 +26,11 @@ jobs:
         run: |
           npm ci --omit=dev
           printf '%s\n' "$GITHUB_SHA" > REVISION
-          tar -czf release.tar.gz dist node_modules package.json package-lock.json REVISION
+          # CLI shims are not used by the service's direct Node entry point.
+          tar --exclude='node_modules/.bin' -czf release.tar.gz dist node_modules package.json package-lock.json REVISION
+          mkdir "$RUNNER_TEMP/otp-release-check"
+          python3 deploy/oracle/extract.py release.tar.gz "$RUNNER_TEMP/otp-release-check" "$GITHUB_SHA"
+          node --check "$RUNNER_TEMP/otp-release-check/dist/server.js"
       - uses: actions/upload-artifact@v4
         if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
         with:

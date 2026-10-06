@@ -27,7 +27,7 @@ install -d -o otpproxy -g otpproxy -m 0700 "$base/proxy-data"
 tar -xJf "$source_dir/$node_archive" -C "$base/runtime" --strip-components=1 --no-same-owner
 tar -xzf "$source_dir/$caddy_archive" -C "$base/bin" caddy --no-same-owner
 chmod 0755 "$base/bin/caddy"
-install -m 0755 "$source_dir/deploy.sh" "$source_dir/firewall.sh" "$base/bin/"
+install -m 0755 "$source_dir/deploy.sh" "$base/bin/"
 install -m 0644 "$source_dir/extract.py" "$base/bin/"
 install -m 0644 "$source_dir/Caddyfile" "$base/config/Caddyfile"
 printf 'restrict,command="%s/bin/deploy.sh" %s\n' "$base" "$(cat "$source_dir/deploy-key.pub")" > "$base/home/.ssh/authorized_keys"
@@ -35,11 +35,11 @@ chmod 0644 "$base/home/.ssh/authorized_keys"
 printf 'otpapi ALL=(root) NOPASSWD: /usr/bin/systemctl restart whatsapp-otp-api.service, /usr/bin/systemctl stop whatsapp-otp-api.service\n' > /etc/sudoers.d/whatsapp-otp-api
 chmod 0440 /etc/sudoers.d/whatsapp-otp-api
 visudo -cf /etc/sudoers.d/whatsapp-otp-api
-install -m 0644 "$source_dir/whatsapp-otp-api.service" "$source_dir/whatsapp-otp-proxy.service" "$source_dir/whatsapp-otp-firewall.service" /etc/systemd/system/
+install -m 0644 "$source_dir/whatsapp-otp-api.service" "$source_dir/whatsapp-otp-proxy.service" /etc/systemd/system/
 "$base/bin/caddy" validate --config "$base/config/Caddyfile" --adapter caddyfile
-systemd-analyze verify /etc/systemd/system/whatsapp-otp-api.service /etc/systemd/system/whatsapp-otp-proxy.service /etc/systemd/system/whatsapp-otp-firewall.service
+systemd-analyze verify /etc/systemd/system/whatsapp-otp-api.service /etc/systemd/system/whatsapp-otp-proxy.service
 systemctl daemon-reload
-systemctl enable whatsapp-otp-api.service whatsapp-otp-proxy.service whatsapp-otp-firewall.service
+systemctl enable whatsapp-otp-api.service whatsapp-otp-proxy.service
 echo 'Isolated OTP runtime and services installed; application and proxy are not started yet.'
 "$base/runtime/bin/node" --version
 "$base/bin/caddy" version

@@ -1,7 +1,7 @@
 [Unit]
-Description=HTTPS proxy for WhatsApp OTP API only
-After=network-online.target whatsapp-otp-firewall.service
-Wants=network-online.target whatsapp-otp-firewall.service
+Description=Domain routing for Viddownhub and WhatsApp OTP API
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
