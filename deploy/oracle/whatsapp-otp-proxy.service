@@ -1,0 +1,35 @@
+[Unit]
+Description=HTTPS proxy for WhatsApp OTP API only
+After=network-online.target whatsapp-otp-firewall.service
+Wants=network-online.target whatsapp-otp-firewall.service
+
+[Service]
+Type=simple
+User=otpproxy
+Group=otpproxy
+Environment=XDG_DATA_HOME=/opt/whatsapp-otp-api/proxy-data
+Environment=XDG_CONFIG_HOME=/opt/whatsapp-otp-api/proxy-data
+ExecStart=/opt/whatsapp-otp-api/bin/caddy run --config /opt/whatsapp-otp-api/config/Caddyfile --adapter caddyfile
+Restart=on-failure
+RestartSec=10
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ReadWritePaths=/opt/whatsapp-otp-api/proxy-data
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+MemoryMax=128M
+CPUQuota=30%
+Nice=10
+TasksMax=96
+
+[Install]
+WantedBy=multi-user.target

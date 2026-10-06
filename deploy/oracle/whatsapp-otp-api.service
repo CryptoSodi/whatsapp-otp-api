@@ -1,0 +1,41 @@
+[Unit]
+Description=WhatsApp OTP sending API
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=120
+StartLimitBurst=6
+
+[Service]
+Type=simple
+User=otpapi
+Group=otpapi
+WorkingDirectory=/opt/whatsapp-otp-api/deploy/current
+EnvironmentFile=/etc/whatsapp-otp-api.env
+Environment=NODE_ENV=production
+Environment=NODE_OPTIONS=--max-old-space-size=256
+ExecStart=/opt/whatsapp-otp-api/runtime/bin/node dist/server.js
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=35
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ReadWritePaths=/opt/whatsapp-otp-api/data
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+MemoryHigh=288M
+MemoryMax=384M
+MemorySwapMax=128M
+CPUQuota=60%
+Nice=10
+TasksMax=128
+
+[Install]
+WantedBy=multi-user.target

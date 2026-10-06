@@ -4,6 +4,8 @@ A small, self-hosted Node.js API that delivers an OTP supplied by your applicati
 
 The service uses Fastify 5, TypeScript, and **Baileys 7.0.0-rc14**, pinned in `package-lock.json`. Run it as one persistent process on a Linux VM such as Oracle Cloud, with one WhatsApp account. Vercel Functions are not the deployment target.
 
+**Production:** `https://otp.sirfbazar.com`. Pushes to `main` deploy automatically after CI passes. See the [Oracle operations guide](deploy/oracle/README.md) for the isolated systemd deployment on the shared VM, SSH access, and rollback. The Docker instructions below remain available for standalone hosts.
+
 ## Quick start
 
 Requires **Node.js 22.19+** (Node 22 LTS recommended) and npm. Node's built-in SQLite module is used for WhatsApp authentication and encryption keys; Node 22 may print an experimental-module warning.

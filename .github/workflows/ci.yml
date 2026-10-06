@@ -2,11 +2,12 @@ name: CI
 on:
   push:
   pull_request:
+  workflow_dispatch:
 permissions:
   contents: read
 jobs:
   verify:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -17,7 +18,21 @@ jobs:
       - run: npm run format:check
       - run: npm run check
       - run: npm run smoke
+      - run: bash -n deploy/oracle/install.sh deploy/oracle/deploy.sh deploy/oracle/firewall.sh
+      - run: python3 -m unittest discover -s deploy/oracle -p 'test_*.py'
       - run: npm audit --omit=dev --audit-level=high
+      - name: Package production release
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        run: |
+          npm ci --omit=dev
+          printf '%s\n' "$GITHUB_SHA" > REVISION
+          tar -czf release.tar.gz dist node_modules package.json package-lock.json REVISION
+      - uses: actions/upload-artifact@v4
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        with:
+          name: otp-release-${{ github.sha }}
+          path: release.tar.gz
+          retention-days: 3
   container:
     strategy:
       matrix:
@@ -48,3 +63,39 @@ jobs:
       - name: Stop container
         if: always()
         run: docker rm -f otp-smoke || true
+  deploy:
+    name: Deploy OTP API to Oracle
+    needs: [verify, container]
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    concurrency:
+      group: oracle-otp-production
+      cancel-in-progress: false
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: otp-release-${{ github.sha }}
+      - name: Install restricted deployment SSH key
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.ORACLE_OTP_SSH_KEY }}
+          SSH_KNOWN_HOSTS: ${{ vars.ORACLE_OTP_KNOWN_HOSTS }}
+        run: |
+          test -n "$SSH_PRIVATE_KEY"
+          test -n "$SSH_KNOWN_HOSTS"
+          umask 077
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$RUNNER_TEMP/otp_deploy_key"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$RUNNER_TEMP/otp_known_hosts"
+      - name: Deploy tested commit
+        env:
+          DEPLOY_HOST: ${{ vars.ORACLE_OTP_HOST }}
+        run: |
+          test -n "$DEPLOY_HOST"
+          ssh -T -i "$RUNNER_TEMP/otp_deploy_key" \
+            -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$RUNNER_TEMP/otp_known_hosts" \
+            -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=3 \
+            "otpapi@$DEPLOY_HOST" "deploy $GITHUB_SHA" < release.tar.gz
+      - name: Remove temporary deployment key
+        if: always()
+        run: rm -f "$RUNNER_TEMP/otp_deploy_key" "$RUNNER_TEMP/otp_known_hosts"

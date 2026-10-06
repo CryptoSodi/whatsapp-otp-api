@@ -1,0 +1,13 @@
+[Unit]
+Description=Allow HTTPS for the isolated WhatsApp OTP proxy
+After=network-pre.target netfilter-persistent.service
+Before=whatsapp-otp-proxy.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/opt/whatsapp-otp-api/bin/firewall.sh start
+ExecStop=/opt/whatsapp-otp-api/bin/firewall.sh stop
+
+[Install]
+WantedBy=multi-user.target

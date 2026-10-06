@@ -12,3 +12,6 @@ whatsapp-qr.svg
 .DS_Store
 .codex/
 .test-output/
+release.tar.gz
+REVISION
+__pycache__/
